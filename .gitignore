@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual env
+.venv/
+venv/
+
+# Logs
+*.log
+logs/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Secrets
+config/export_jobs.yaml
+.env
+
+# Video exports
+videos/
+*.mp4
+*.avi
+*.wmv
+*.bvr
+
+# IDE
+.vscode/
+.idea/
+

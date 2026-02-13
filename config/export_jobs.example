@@ -1,0 +1,30 @@
+blueiris:
+  host: http://192.168.195.82:81
+  username: ghoul
+  password: HelloWorld
+
+export_root: /Users/tedspecht/haunt_stalker/haunt_blueiris_videos/videos
+
+jobs:
+  - camera: am016-gp02
+    date: 2026-02-08
+    start: "12:00:00"
+    end: "14:00:00"
+
+  - camera: am036-gp02
+    date: 2026-02-08
+    start: "12:00:00"
+    end: "14:00:00"
+
+  - camera: rl29-gp06
+    date: 2026-02-07
+    start: "19:00:00"
+    end: "22:00:00"
+
+  - camera: rl27-gp06
+    date: 2026-02-07
+    start: "19:00:00"
+    end: "22:00:00"
+
+
+
