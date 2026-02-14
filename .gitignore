@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+.env
 
 # Virtual env
 .venv/
@@ -31,8 +32,21 @@ videos/
 *.wmv
 *.bvr
 
+# Documents
+documents/
+*.pdf
+*.xls
+*.csv
+*.txt
+*.doc
+
 # IDE
 .vscode/
 .idea/
 
 .cache_ggshield
+
+# nginx
+nginx/ssl/*.key
+nginx/ssl/*.crt
+nginx/.htpasswd
