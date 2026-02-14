@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ZeroTier Network Dashboard</title>
+
+<style>
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    background-color: #111;
+    color: #eee;
+}
+
+header {
+    background: #1a1a1a;
+    padding: 15px 25px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid #333;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 20px;
+}
+
+.zt-badge {
+    background: #5b00ff;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.summary {
+    padding: 15px 25px;
+    background: #181818;
+    border-bottom: 1px solid #333;
+}
+
+.badge {
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: bold;
+    color: white;
+}
+
+.badge.good { background-color: #00a86b; }
+.badge.degraded { background-color: #ff9900; }
+.badge.critical { background-color: #cc0000; }
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th, td {
+    padding: 10px 12px;
+    text-align: left;
+}
+
+th {
+    background-color: #1a1a1a;
+    border-bottom: 2px solid #333;
+}
+
+tr:nth-child(even) {
+    background-color: #161616;
+}
+
+tr:hover {
+    background-color: #222;
+}
+
+.online {
+    color: #00ff88;
+    font-weight: bold;
+}
+
+.stale {
+    color: #ffcc00;
+    font-weight: bold;
+}
+
+.offline {
+    color: #ff4d4d;
+    font-weight: bold;
+}
+
+.small {
+    font-size: 12px;
+    color: #aaa;
+}
+
+.footer {
+    text-align: center;
+    padding: 10px;
+    font-size: 12px;
+    color: #777;
+    border-top: 1px solid #333;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+    <h1>Network Operations Dashboard</h1>
+    <div class="zt-badge">ZeroTier</div>
+</header>
+
+<div class="summary" id="networkSummary">
+    Loading network data...
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>IP Address</th>
+            <th>Authorized</th>
+            <th>Status</th>
+            <th>Last Seen</th>
+        </tr>
+    </thead>
+    <tbody id="ztTableBody">
+    </tbody>
+</table>
+
+<div class="footer">
+    Auto-refreshing every 15 seconds
+</div>
+
+<script>
+async function fetchData() {
+    try {
+        const response = await fetch("/api/zt");
+        const payload = await response.json();
+
+        const summary = payload.summary;
+        const data = payload.members;
+
+        renderSummary(summary);
+        renderTable(data);
+
+    } catch (error) {
+        document.getElementById("networkSummary").innerHTML =
+            "<span class='offline'>Error loading network data</span>";
+        console.error("Fetch error:", error);
+    }
+}
+
+function renderSummary(summary) {
+    const healthClass = summary.health;
+
+    document.getElementById("networkSummary").innerHTML = `
+        <strong>Network Health:</strong>
+        <span class="badge ${healthClass}">
+            ${summary.health.toUpperCase()}
+        </span>
+        &nbsp;&nbsp;
+        Online: ${summary.online_nodes} /
+        ${summary.total_nodes}
+        &nbsp;&nbsp;
+        Stale: ${summary.stale_nodes}
+        &nbsp;&nbsp;
+        Offline: ${summary.offline_nodes}
+    `;
+}
+
+function renderTable(nodes) {
+    const tableBody = document.getElementById("ztTableBody");
+    tableBody.innerHTML = "";
+
+    nodes.forEach(node => {
+        const row = `
+        <tr>
+            <td>${node.name || "—"}</td>
+            <td>${node.ip}</td>
+            <td>${node.authorized ? "Yes" : "No"}</td>
+            <td class="${node.state}">
+                ${node.state.toUpperCase()}
+            </td>
+            <td>
+                ${node.lastSeenHuman}
+                <div class="small">${node.lastSeenAgo}</div>
+            </td>
+        </tr>
+        `;
+        tableBody.innerHTML += row;
+    });
+}
+
+// Initial load
+fetchData();
+
+// Auto refresh every 15 seconds
+setInterval(fetchData, 15000);
+</script>
+
+</body>
+</html>
+

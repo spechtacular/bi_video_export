@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ZeroTier Dashboard</title>
+    <style>
+        body {
+            background-color: #111;
+            color: white;
+            font-family: Arial;
+        }
+        table {
+            width: 90%;
+            margin: auto;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 10px;
+            border: 1px solid #333;
+            text-align: left;
+        }
+        th {
+            background-color: #222;
+        }
+        .online {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        .offline {
+            color: #f44336;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<h1 style="text-align:center;">ZeroTier Network Dashboard</h1>
+
+<table>
+    <tr>
+        <th>Node ID</th>
+        <th>IP Address</th>
+        <th>Authorized</th>
+        <th>Status</th>
+        <th>Last Seen</th>
+    </tr>
+    {% for m in members %}
+    <tr>
+        <td>{{ m.id }}</td>
+        <td>{{ m.ip }}</td>
+        <td>{{ m.authorized }}</td>
+        <td class="{{ 'online' if m.online else 'offline' }}">
+            {{ "ONLINE" if m.online else "OFFLINE" }}
+        </td>
+        <td>{{ m.lastSeen }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+</body>
+</html>
+
