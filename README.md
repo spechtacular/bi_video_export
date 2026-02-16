@@ -14,229 +14,271 @@ This project provides a robust, production-ready interface for:
 
 ---
 
-# Overview
+# Blue Iris Video Export Platform
 
-Blue Iris exposes a JSON API for clip listing and export operations. However, the API behavior differs significantly from older documentation and from what the Web UI appears to do internally.
+Production-grade automation pipeline for:
 
-This project implements the correct workflow for Blue Iris **5.9.9.x**, including:
-
-- HTTP Basic authentication
-- JSON session login handshake
-- Export queue management using `cmd="export"`
-- Proper download endpoint usage via `/clips/{uri}`
-- Cross-platform filename normalization
-- Thread-safe concurrent export handling
-
----
-
-# Architecture
-
-The solution is divided into three primary components:
-bi_interface.py → CLI entrypoint
-bi_client.py → Blue Iris API client
-bi_exporter.py → Export orchestration + threading
-
+- Exporting clips from Blue Iris via JSON API
+- Weekend (Fri/Sat/Sun) scheduled exports
+- Multi-camera batch jobs
+- Export deduplication
+- Export metrics tracking
+- ZeroTier network dashboard
+- Nginx portal integration
+- Threaded export processing
+- Timezone-aware scheduling
 
 ---
 
-## 1. `bi_client.py`
+# Architecture Overview
 
-Encapsulates all communication with Blue Iris.
+Blue Iris Server
+│
+│ JSON API (login, cliplist, export)
+▼
+bi_client.py
+│
+▼
+bi_exporter.py
+│
+├── Export Tracker (JSON file)
+├── Metrics aggregation
+├── ThreadPool export workers
+▼
+Exported MP4 files
+│
+▼
+Nginx HTTPS Portal
+├── /videos
+├── /images
+├── /documents
+├── /zt dashboard
+└── /bi_metrics dashboard
 
-### Responsibilities
-
-- HTTP Basic authentication
-- JSON session login (MD5 challenge/response)
-- Clip listing (`cliplist`)
-- Camera listing (`camlist`)
-- Export queue enqueue (`cmd="export"`)
-- Download handling via `/clips/{uri}`
-
-### Design Decisions
-
-- Uses `requests.Session()` for persistent cookies
-- Implements safe session refresh logic (no recursion)
-- Separates queue ID from export URI correctly
-- Avoids deprecated `clipcreate`
-
----
-
-## 2. `bi_exporter.py`
-
-Handles the export workflow and concurrency.
-
-### Responsibilities
-
-- Time-range clip querying
-- Enqueueing exports
-- Polling `/clips/{uri}` until available
-- Saving files locally
-- Structured logging
-- ThreadPoolExecutor-based parallel processing
-- Clean summary reporting
-
-### Important Behavior
-
-- Uses `cmd="export"` (not `clipcreate`)
-- Extracts `uri` from export response
-- Downloads using `/clips/{uri}?session=...`
-- Normalizes Windows backslashes for cross-platform compatibility
 
 ---
 
-## 3. `bi_interface.py`
+# Features
 
-Command-line entrypoint.
+## Export Engine
 
-### Responsibilities
-
-- Load YAML configuration
-- Instantiate `BlueIrisClient`
-- Trigger exports
-- Optional camera listing
-- Print summary results
-
----
-
-# Correct Blue Iris Export Workflow
-
-The working flow (as confirmed by documentation and live testing):
-
-1. Authenticate via HTTP Basic
-2. Perform JSON login handshake
-3. Call:
-        cmd = "export"
-        path = "@record"
-4. Receive:
-        {
-        "path": "@queue_record",
-        "status": "queued",
-        "uri": "Clipboard\filename.mp4"
-        }
-5. Poll:
-        /clips/{uri}?session=...
-
-6. When HTTP 200 → download file
-
-### Important Notes
-
-- `/file/` is **not** correct for export products
-- `/clips/` must be used
-- `uri` must be normalized (Windows → POSIX path separators)
-
----
-
-# Why This Took the Long Path
-
-This integration required navigating several non-obvious Blue Iris behaviors.
-
-### 1. `clipcreate` Is Deprecated / Restricted
-
-Even admin users receive `"Access denied"` in modern 5.9 builds.  
-The correct command is `cmd="export"`.
-
-### 2. Export Queue ≠ Direct File Endpoint
-
-Export products are accessed via:
-    /clips/{uri}
-
-NOT via `/file/`.
-
-### 3. `path` Is Not the Download Target
-
-The returned `"path"` is a queue ID — not the exported file.
-
-The `"uri"` is the actual file reference.
-
-### 4. Windows Paths on macOS/Linux
-
-Blue Iris returns:
-
-videos/<camera>/<YYYY-MM-DD>/
-
-- Automatic camera folder initialization
+- Uses modern BI `export` command (not deprecated `clipcreate`)
+- Polls export queue until `status=done`
+- Downloads from `/clips/`
+- Automatically removes `Clipboard\` from filenames
+- Multi-threaded exports
+- Timezone-aware epoch conversion
+- Handles large clips
 - Clean failure reporting
-- Cross-platform compatibility
-- Production-safe retry logic
+
+## Export Deduplication
+
+Clips are tracked in:
+
+<export_root>/.bi_export_tracker.json
+
+
+If a clip was previously exported successfully:
+
+
+It will be skipped automatically.
 
 ---
 
-# Example Folder Structure
+## Metrics Dashboard
 
-videos/
-am016-gp02/2026-02-08/am016-gp02.20260208_121446-122703.mp4
-am036-gp02/2026-02-08/am036-gp02.20260208_121008-121457.mp4
+Provides:
+
+- Total success / failed / skipped
+- Per-camera breakdown
+- Recent activity log
+- Health badge
+- Auto-refresh every 10 seconds
+
+Available at:
+
+https://<host>:8443/bi_metrics.html
+
+API endpoint:
+
+/api/bi/metrics
+
 
 ---
 
-# Configuration
+## ZeroTier Dashboard
 
-All clips are specified in the configuration file:
+Live network visibility:
 
-    `config/export_jobs.yaml`
+- Online / offline nodes
+- 2–10 minute “stale” yellow state
+- Network health badge
+- Online node count
+
+Available at:
+
+https://<host>:8443/zt_dashboard.html
+
+
+API endpoint:
+
+/api/zt
+
+
+---
+
+# Project Structure
+
+bi_video_export/
+│
+├── src/
+│ └── bi_exporter/
+│ ├── bi_client.py
+│ ├── bi_exporter.py
+│ └── dashboard/
+│ └── app.py
+│
+├── scripts/
+│ ├── run_dashboard.sh
+│ └── deploy.sh
+│
+├── nginx/
+│ ├── blueiris.conf
+│ └── README.md
+│
+│
+├── videos/ # Export root
+├── documents/
+├── requirements.txt
+├── .env
+└── README.md
+
+
+---
+
+# Required Environment Variables
+
+Create `.env` in project root:
+
+ZT_TOKEN=<your_zerotier_api_token>
+ZT_NETWORK_ID=<your_network_id>
+BI_EXPORT_ROOT=/absolute/path/to/videos
+
+
+Example:
+
+ZT_TOKEN=abc123
+ZT_NETWORK_ID=48d6023c46240a68
+BI_EXPORT_ROOT=/Users/tedspecht/haunt_stalker/bi_video_export/videos
+
+
+---
+
+# Running the Export Script
+
+## Basic Run
+
+
+This:
+
+- Loads config/export_jobs.yaml
+- Logs into Blue Iris
+- Processes all jobs
+- Applies dedupe
+- Writes metrics
+- Prints summary
+
+---
+
+## List Cameras
+
+
+---
+
+## List Clips
+
+python bi_interface.py
+--list-clips am011-gp01
+--date 2026-02-07
+--start 17:00:00
+--end 21:00:00
+
+
+---
+
+## Weekend Export Automation
+
+Example job config:
 
 ```yaml
-        blueiris:
-        host: "http://192.168.195.82:81"
-        username: "theo"
-        password: "your_password"
+jobs:
+  - camera: am016-gp02
+    date: 2026-02-07
+    start: "18:00:00"
+    end: "23:00:00"
+    timezone: America/Chicago
 
-        export_root: "videos"
-
-        jobs:
-        - camera: "am016-gp02"
-            date: 2026-02-08
-            start: "12:00:00"
-            end: "14:00:00"
-
----
-
-# Running video export
-python bi_interface.py
-
-# Running list cameras and their status
-python bi_interface.py --list-cameras
-
-
-# Performance Notes
-
-reencode=False uses direct-to-disk export (fastest)
-
-reencode=True performs full conversion (slower but sometimes required)
-
-Long clips may require extended polling windows
-
-Export duration depends on clip length and disk throughput
-
-Final Thoughts
-
-What initially appeared to be:
-
-A permissions problem
-
-An authentication problem
-
-An API failure
-
-Turned out to be:
-
-API evolution
-
-Endpoint differences
-
-Export queue mechanics
-
-Windows path normalization issues
-
-Version-specific behavior in 5.9.x
-
-The result is now a stable, version-aligned export pipeline that mirrors the behavior of the Blue Iris Web UI while remaining fully automated and scriptable.
-
-This solution is production-ready and robust against the quirks of modern Blue Iris builds.
 
 
 ---
 
 
+You can dynamically generate jobs for every Friday, Saturday, Sunday.
+
+Running the Dashboard
+Start Flask Dashboard
+./scripts/run_dashboard.sh
 
 
+Flask runs locally:
+http://127.0.0.1:5001
+
+Nginx proxies:
+https://<host>:8443/api/
+
+To restart nginx on Mac:
+brew services restart nginx
+
+Installing Dependencies
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+
+Example requirements:
+- Flask
+- requests
+- PyYAML
+
+---
+
+Troubleshooting
+- Export Never Completes
+-- Check BI Convert/Export queue in console
+-- Verify disk space
+-- Try reencode=false for faster direct export
+- 401 Unauthorized
+-- Verify HTTP Basic Auth credentials
+-- Confirm BI web server authentication settings
+- 404 Export Download
+-- Ensure correct /clips/{uri} path
+-- Confirm export reached status=done
+
+---
+
+
+Development Notes
+- No SQLite used
+- Tracker stored as JSON
+- Thread-safe export processing
+- No recursive retry loops
+- Designed for macOS + Homebrew nginx
+- Compatible with ZeroTier private network
+
+---
+
+Security Notes
+- Nginx uses HTTPS (self-signed)
+- HTTP Basic Auth protects portal
+- ZeroTier isolates internal services
+- Flask bound to 127.0.0.1 only

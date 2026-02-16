@@ -3,231 +3,178 @@ Blue Iris JSON API client
 - HTTP Basic + JSON session login
 - Uses cmd="export" (Convert/Export queue) for MP4 creation
 - Robust, non-recursive session refresh
+- Thread-safe
 """
 
-from __future__ import annotations
-
-import hashlib
-import time
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-
 import requests
-from requests.auth import HTTPBasicAuth
+import hashlib
+import threading
+from typing import Optional
 
 
 class BlueIrisClient:
-    def __init__(self, host: str, username: str, password: str, timeout: int = 15):
+    def __init__(
+        self,
+        host: str,
+        username: str,
+        password: str,
+        timeout: int = 30,
+    ):
         self.host = host.rstrip("/")
         self.username = username
         self.password = password
         self.timeout = timeout
 
-        self.http = requests.Session()
-        self.http.auth = HTTPBasicAuth(self.username, self.password)
-
         self.session_token: Optional[str] = None
+        self.http = requests.Session()
+        self.http.auth = (self.username, self.password)
 
-    # -----------------------------
-    # Login handshake
-    # -----------------------------
+        self._auth_lock = threading.Lock()
 
-    def login(self) -> None:
-        # Step 1: request session
-        r1 = self.http.post(f"{self.host}/json", json={"cmd": "login"}, timeout=self.timeout)
-        if r1.status_code == 401:
-            raise RuntimeError("HTTP 401 Unauthorized during login step 1 (check credentials)")
-        if r1.status_code != 200:
-            raise RuntimeError(f"Login step 1 HTTP {r1.status_code}: {r1.text[:300]}")
+    # --------------------------------------------------------
+    # Internal POST helper
+    # --------------------------------------------------------
 
-        data1 = r1.json()
-        session = data1.get("session")
-        if not session:
-            raise RuntimeError(f"Login step 1 failed: {data1}")
+    def _post(self, payload: dict) -> dict:
+        url = f"{self.host}/json"
 
-        # Step 2: MD5(username:session:password)
-        raw = f"{self.username}:{session}:{self.password}"
-        response_hash = hashlib.md5(raw.encode("utf-8")).hexdigest()
-
-        r2 = self.http.post(
-            f"{self.host}/json",
-            json={"cmd": "login", "session": session, "response": response_hash},
+        r = self.http.post(
+            url,
+            json=payload,
             timeout=self.timeout,
         )
-        if r2.status_code == 401:
-            raise RuntimeError("HTTP 401 Unauthorized during login step 2 (check credentials)")
-        if r2.status_code != 200:
-            raise RuntimeError(f"Login step 2 HTTP {r2.status_code}: {r2.text[:300]}")
 
-        data2 = r2.json()
-        if data2.get("result") != "success":
-            raise RuntimeError(f"Login failed: {data2}")
+        if r.status_code == 401:
+            raise RuntimeError("HTTP 401 Unauthorized (check credentials)")
 
-        self.session_token = data2.get("session") or session
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code}: {r.text}")
 
-    def _ensure_logged_in(self) -> None:
-        if not self.session_token:
-            self.login()
+        try:
+            return r.json()
+        except Exception:
+            raise RuntimeError(f"Invalid JSON response: {r.text[:500]}")
 
-    # -----------------------------
-    # JSON POST with 1 refresh retry
-    # -----------------------------
+    # --------------------------------------------------------
+    # Login
+    # --------------------------------------------------------
 
-    def _post(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        self._ensure_logged_in()
+    def login(self):
+        with self._auth_lock:
 
-        for _ in range(2):  # try, then refresh session once if needed
-            body = dict(payload)
-            body["session"] = self.session_token
+            # Step 1 — request session
+            r1 = self._post({"cmd": "login"})
 
-            r = self.http.post(f"{self.host}/json", json=body, timeout=self.timeout)
+            if "session" not in r1:
+                raise RuntimeError(f"Login step 1 failed: {r1}")
 
-            if r.status_code == 401:
-                # Basic auth failed or server wants auth again
-                raise RuntimeError("HTTP 401 Unauthorized (check credentials / web server auth)")
+            session = r1["session"]
 
-            if r.status_code != 200:
-                raise RuntimeError(f"HTTP {r.status_code}: {r.text[:500]}")
+            # Step 2 — MD5 response hash
+            response_hash = hashlib.md5(
+                f"{self.username}:{session}:{self.password}".encode()
+            ).hexdigest()
 
-            data = r.json()
+            r2 = self._post({
+                "cmd": "login",
+                "session": session,
+                "response": response_hash,
+            })
 
-            # Refresh only on explicit invalid-session style failures
-            reason = ""
-            if isinstance(data.get("data"), dict):
-                reason = str(data["data"].get("reason", "")).lower()
+            if r2.get("result") != "success":
+                raise RuntimeError(f"Login failed: {r2}")
 
-            if data.get("result") == "fail" and ("invalid session" in reason or "session" in reason):
-                self.login()
-                continue
+            self.session_token = r2["session"]
 
-            return data
+    # --------------------------------------------------------
+    # Camera Listing
+    # --------------------------------------------------------
 
-        raise RuntimeError("Request failed after session refresh retry")
+    def list_cameras(self):
+        self._ensure_login()
 
-    # -----------------------------
-    # API methods
-    # -----------------------------
+        r = self._post({
+            "cmd": "camlist",
+            "session": self.session_token,
+        })
 
-    def list_clips(self, camera: str, start_epoch: int, end_epoch: int) -> List[Dict[str, Any]]:
-        r = self._post(
-            {
-                "cmd": "cliplist",
-                "camera": camera,
-                "startdate": start_epoch,
-                "enddate": end_epoch,
-                "view": "stored",
-            }
-        )
-        if r.get("result") != "success":
-            raise RuntimeError(f"cliplist failed: {r}")
-        return r.get("data", []) or []
-
-    def list_cameras(self) -> List[Dict[str, Any]]:
-        r = self._post({"cmd": "camlist"})
         if r.get("result") != "success":
             raise RuntimeError(f"camlist failed: {r}")
 
-        cameras: List[Dict[str, Any]] = []
-        for cam in r.get("data", []) or []:
-            if "ip" in cam:  # real cameras only
-                cameras.append(
-                    {
-                        "short": cam.get("optionValue"),
-                        "name": cam.get("optionDisplay"),
-                        "ip": cam.get("ip"),
-                        "is_enabled": cam.get("isEnabled", False),
-                        "is_online": cam.get("isOnline", False),
-                    }
-                )
+        cameras = []
+
+        for cam in r.get("data", []):
+            if "ip" in cam:  # Skip layouts/groups
+                cameras.append({
+                    "short": cam["optionValue"],
+                    "name": cam["optionDisplay"],
+                    "ip": cam.get("ip"),
+                    "is_enabled": cam.get("isEnabled", False),
+                    "is_online": cam.get("isOnline", False),
+                })
+
         return cameras
 
-    # -----------------------------
-    # Export queue (cmd="export")
-    # -----------------------------
+    # --------------------------------------------------------
+    # Clip Listing
+    # --------------------------------------------------------
 
-    def enqueue_export(
+    def list_clips(self, camera: str, start_epoch: int, end_epoch: int):
+        self._ensure_login()
+
+        r = self._post({
+            "cmd": "cliplist",
+            "session": self.session_token,
+            "camera": camera,
+            "startdate": start_epoch,
+            "enddate": end_epoch,
+            "view": "stored",
+        })
+
+        if r.get("result") != "success":
+            raise RuntimeError(f"cliplist failed: {r}")
+
+        return r.get("data", [])
+
+    # --------------------------------------------------------
+    # Create Export (Modern BI API)
+    # --------------------------------------------------------
+
+    def create_export(
         self,
-        *,
-        clip_record: str,
-        startms: Optional[int] = None,
-        msec: Optional[int] = None,
-        audio: bool = True,
-        overlay: bool = False,
-        format_code: int = 1,  # 1 = MP4
-        profile: Optional[int] = None,
+        path: str,
+        format: int = 1,        # 1 = MP4
         reencode: bool = True,
-        timelapse: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Creates an export item in BI's Convert/Export queue.
-        Returns BI's response data; typically includes a 'path' to the export item.
-        """
-        payload: Dict[str, Any] = {
+        overlay: bool = False,
+        audio: bool = True,
+    ):
+        self._ensure_login()
+
+        payload = {
             "cmd": "export",
-            "path": clip_record,   # "@record"
-            "audio": audio,
-            "overlay": overlay,
-            "format": format_code,  # 1 = MP4
+            "session": self.session_token,
+            "path": path,
+            "format": format,
             "reencode": reencode,
+            "overlay": overlay,
+            "audio": audio,
         }
-        if startms is not None:
-            payload["startms"] = int(startms)
-        if msec is not None:
-            payload["msec"] = int(msec)
-        if profile is not None:
-            payload["profile"] = int(profile)
-        if timelapse is not None:
-            payload["timelapse"] = timelapse
 
         r = self._post(payload)
+
         if r.get("result") != "success":
-            raise RuntimeError(f"export enqueue failed: {r}")
+            raise RuntimeError(f"Export failed: {r}")
 
-        return r.get("data") or {}
+        return r.get("data")
 
-    def export_status(self, export_path: str) -> Dict[str, Any]:
-        """
-        Query status of a single export item.
-        """
-        r = self._post({"cmd": "export", "path": export_path})
-        if r.get("result") != "success":
-            raise RuntimeError(f"export status failed: {r}")
-        return r.get("data") or {}
+    # --------------------------------------------------------
+    # Check Export Status
+    # --------------------------------------------------------
 
-    # -----------------------------
-    # Download helper
-    # -----------------------------
+    def check_export_status(self, export_id: str):
+        self._ensure_login()
 
-    def download_file_when_ready(
-        self,
-        *,
-        filename_or_path: str,
-        output_path: Path,
-        poll_attempts: int = 30,
-        poll_interval: float = 2.0,
-    ) -> None:
-        """
-        Polls /file/<name>?session=... until available then downloads.
-        filename_or_path may be 'New\\xyz.mp4' or just 'xyz.mp4'.
-        """
-        self._ensure_logged_in()
+        r = self._post({
+            "cmd": "export",
+            "session": self.sessi
 
-        filename = Path(filename_or_path).name
-        url = f"{self.host}/file/{filename}?session={self.session_token}"
-
-        last_status = None
-        for _ in range(poll_attempts):
-            r = self.http.get(url, stream=True, timeout=self.timeout)
-            last_status = r.status_code
-
-            if r.status_code == 200:
-                with open(output_path, "wb") as f:
-                    for chunk in r.iter_content(1024 * 1024):
-                        if chunk:
-                            f.write(chunk)
-                return
-
-            r.close()
-            time.sleep(poll_interval)
-
-        raise RuntimeError(f"Export never became available for download (last HTTP {last_status})")

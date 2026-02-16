@@ -1,5 +1,7 @@
 import os
+import json
 import requests
+from pathlib import Path
 from datetime import datetime, timezone
 from flask import Flask, jsonify
 
@@ -117,6 +119,27 @@ def create_app():
             },
             "members": processed
         })
+
+    return app
+
+
+
+        counters = data.get("counters", {})
+        per_camera = data.get("per_camera", {})
+        events = data.get("events", [])[-50:]  # last 50
+
+        payload = {
+            "updated_at_utc": data.get("updated_at_utc"),
+            "created_at_utc": data.get("created_at_utc"),
+            "counters": {
+                "success": counters.get("success", 0),
+                "failed": counters.get("failed", 0),
+                "skipped": counters.get("skipped", 0),
+            },
+            "per_camera": per_camera,
+            "recent_events": events,
+        }
+        return jsonify(payload)
 
     return app
 
